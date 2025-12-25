@@ -1,0 +1,4 @@
+urllib3<2
+requests
+pandas
+python-dotenv
