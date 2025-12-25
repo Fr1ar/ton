@@ -1,3 +1,4 @@
+import time
 import os
 from dotenv import load_dotenv
 import requests
@@ -10,13 +11,16 @@ load_dotenv()
 
 BASE_URL = "https://toncenter.com/api/v2"
 
+MAX_RETRIES = 50 # повтор в случае ошибки
+RETRY_DELAY = 2 # секунды
+
 # Fragment: "UQDm89iCT0ax77q5r8aEeTQoxV_tabRqFaSb5popvEnlMO6e"
 ACCOUNT = "0:e6f3d8824f46b1efbab9afc684793428c55fed69b46a15a49be69a29bc49e530" # TON address
 LIMIT = 100  # максимум за запрос
 
 
 # декабрь 2025
-START_TS = int(datetime(2025, 12, 25, tzinfo=timezone.utc).timestamp())
+START_TS = int(datetime(2025, 12, 1, tzinfo=timezone.utc).timestamp())
 END_TS   = int(datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp())
 
 # ============================================
@@ -42,10 +46,20 @@ def get_transactions(account):
             params["hash"] = hash_
 
         print(f"Fetching transactions from {lt} {hash_}...")
-        r = requests.get(f"{BASE_URL}/getTransactions", params=params)
-        r.raise_for_status()
-        data = r.json()["result"]
-        print(f"Fetched {len(data)} transactions")
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                r = requests.get(f"{BASE_URL}/getTransactions", params=params, timeout=10)
+                r.raise_for_status()
+                data = r.json()["result"]
+                print(f"Fetched {len(data)} transactions")
+                break  # успех — выходим из retry-цикла
+
+            except requests.exceptions.RequestException as e:
+                print(f"Request failed (attempt {attempt}/{MAX_RETRIES}): {e}")
+                if attempt == MAX_RETRIES:
+                    raise  # дальше не можем продолжать
+                time.sleep(RETRY_DELAY)
 
         if not data:
             break
