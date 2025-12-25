@@ -9,45 +9,44 @@ load_dotenv()
 
 # ================= НАСТРОЙКИ =================
 
-BASE_URL = "https://toncenter.com/api/v2"
+BASE_URL = "https://toncenter.com/api/v3/transactions"
 
-MAX_RETRIES = 1000  # повтор в случае ошибки
-RETRY_DELAY = 2   # секунды
+MAX_RETRIES = 100  # сколько попыток при ошибках
+RETRY_DELAY = 2   # задержка между попытками в секундах
 
-ACCOUNT = "0:e6f3d8824f46b1efbab9afc684793428c55fed69b46a15a49be69a29bc49e530"  # TON address
-LIMIT = 100  # максимум за запрос
+ACCOUNT = "0:e6f3d8824f46b1efbab9afc684793428c55fed69b46a15a49be69a29bc49e530"
+LIMIT = 1000  # максимум за запрос (API v3 ограничивает до 1000) :contentReference[oaicite:1]{index=1}
 
 API_KEY = os.getenv("TON_API_KEY")
 if not API_KEY:
     raise RuntimeError("TON_API_KEY not set in .env")
 
 
-def get_transactions(account, start_ts, end_ts):
+def get_transactions_v3(account, start_ts, end_ts):
     all_txs = []
-    lt = None
-    hash_ = None
+    offset = 0
 
     while True:
         params = {
-            "address": account,
+            "account": account,
             "limit": LIMIT,
-            "api_key": API_KEY
+            "offset": offset,
+            "start_utime": start_ts,
+            "end_utime": end_ts,
         }
 
-        if lt and hash_:
-            params["lt"] = lt
-            params["hash"] = hash_
+        headers = {
+            "X-Api-Key": API_KEY
+        }
 
-        print(f"Fetching transactions from {lt} {hash_}...")
+        print(f"Fetching transactions offset={offset}...")
 
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                r = requests.get(f"{BASE_URL}/getTransactions", params=params, timeout=10)
+                r = requests.get(BASE_URL, params=params, headers=headers, timeout=10)
                 r.raise_for_status()
-                data = r.json()["result"]
-                first_ts = data[0]["utime"]
-                first_date = datetime.fromtimestamp(first_ts, tz=timezone.utc)
-                print(f"Fetched {len(data)} transactions (date {first_date})")
+                result = r.json()
+                txs = result.get("transactions", [])
                 break
 
             except requests.exceptions.RequestException as e:
@@ -56,47 +55,47 @@ def get_transactions(account, start_ts, end_ts):
                     raise
                 time.sleep(RETRY_DELAY)
 
-        if not data:
+        if not txs:
             break
 
-        for tx in data:
-            ts = tx["utime"]
+        first_date = datetime.fromtimestamp(txs[0]["now"], tz=timezone.utc)
+        print(f"First transaction in this range at: {first_date}")
+        all_txs.extend(txs)
 
-            if ts < start_ts:
-                return all_txs  # ушли глубже
+        # если пришло меньше чем limit — это последняя страница
+        if len(txs) < LIMIT:
+            break
 
-            if start_ts <= ts < end_ts:
-                all_txs.append(tx)
+        offset += LIMIT
 
-        # pagination
-        lt = data[-1]["transaction_id"]["lt"]
-        hash_ = data[-1]["transaction_id"]["hash"]
-
+    print(f"Total fetched: {len(all_txs)}")
     return all_txs
 
 
-def save_to_csv(transactions, account, filename):
+def save_to_csv_v3(transactions, account, filename):
     rows = []
 
     for tx in transactions:
-        ts = datetime.fromtimestamp(tx["utime"], tz=timezone.utc)
+        ts = datetime.fromtimestamp(tx["now"], tz=timezone.utc)
 
-        # RECEIVED
-        in_msg = tx.get("in_msg")
-        if in_msg and in_msg.get("destination") == account:
-            value = int(in_msg.get("value", 0)) / 1e9
-            rows.append({
-                "Timestamp": ts,
-                "Action": "Received",
-                "Address": in_msg.get("source"),
-                "Value (TON)": value
-            })
-
-        # SENT
         for out_msg in tx.get("out_msgs", []):
+            src = out_msg.get("source")
             dest = out_msg.get("destination")
             value = int(out_msg.get("value", 0)) / 1e9
-            if value > 0 and dest != account:
+
+            if value <= 0:
+                continue  # игнорируем нулевые переводы
+
+            if dest == account:
+                # Получили TON
+                rows.append({
+                    "Timestamp": ts,
+                    "Action": "Received",
+                    "Address": src,
+                    "Value (TON)": value
+                })
+            elif src == account:
+                # Отправили TON
                 rows.append({
                     "Timestamp": ts,
                     "Action": "Sent",
@@ -109,6 +108,7 @@ def save_to_csv(transactions, account, filename):
     print(f"Saved {len(df)} rows to {filename}")
 
 
+
 def save_transactions(month, year):
     start_ts = int(datetime(year, month, 1, tzinfo=timezone.utc).timestamp())
     if month == 12:
@@ -116,12 +116,10 @@ def save_transactions(month, year):
     else:
         end_ts = int(datetime(year, month + 1, 1, tzinfo=timezone.utc).timestamp())
     filename = f"{month}_{year}.csv"
-    txs = get_transactions(ACCOUNT, start_ts, end_ts)
-    save_to_csv(txs, ACCOUNT, filename)
+    txs = get_transactions_v3(ACCOUNT, start_ts, end_ts)
+    save_to_csv_v3(txs, ACCOUNT, filename)
 
 
 if __name__ == "__main__":
-    # save_transactions(12, 2025)
     for month in range(12):
         save_transactions(month + 1, 2025)
-
