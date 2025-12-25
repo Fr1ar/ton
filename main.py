@@ -17,9 +17,7 @@ LIMIT = 100  # максимум за запрос
 
 # декабрь 2025
 START_TS = int(datetime(2025, 12, 25, tzinfo=timezone.utc).timestamp())
-
-# END_TS   = int(datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp())
-END_TS = int(datetime(2025, 12, 26, tzinfo=timezone.utc).timestamp())
+END_TS   = int(datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp())
 
 # ============================================
 
@@ -68,25 +66,41 @@ def get_transactions(account):
     return all_txs
 
 
-def save_to_csv(transactions, filename="ton_transactions_dec_2025.csv"):
+def save_to_csv(transactions, account, filename="ton_transactions_dec_2025.csv"):
     rows = []
 
     for tx in transactions:
-        rows.append({
-            "timestamp": datetime.fromtimestamp(tx["utime"], tz=timezone.utc),
-            "lt": tx["transaction_id"]["lt"],
-            "hash": tx["transaction_id"]["hash"],
-            "fee": tx.get("fee", 0),
-            "in_msg_value": tx.get("in_msg", {}).get("value"),
-            "out_msgs_count": len(tx.get("out_msgs", [])),
-            "success": tx.get("description", {}).get("compute_ph", {}).get("success")
-        })
+        ts = datetime.fromtimestamp(tx["utime"], tz=timezone.utc)
+
+        # ---------- RECEIVED ----------
+        in_msg = tx.get("in_msg")
+        if in_msg and in_msg.get("destination") == account:
+            value = int(in_msg.get("value", 0)) / 1e9
+            rows.append({
+                "Timestamp": ts,
+                "Action": "Received",
+                "Address": in_msg.get("source"),
+                "Value (TON)": value
+            })
+
+        # ---------- SENT ----------
+        for out_msg in tx.get("out_msgs", []):
+            dest = out_msg.get("destination")
+            value = int(out_msg.get("value", 0)) / 1e9
+
+            if value > 0 and dest != account:
+                rows.append({
+                    "Timestamp": ts,
+                    "Action": "Sent",
+                    "Address": dest,
+                    "Value (TON)": -value
+                })
 
     df = pd.DataFrame(rows)
     df.to_csv(filename, index=False)
-    print(f"Saved {len(df)} transactions to {filename}")
+    print(f"Saved {len(df)} rows to {filename}")
 
 
 if __name__ == "__main__":
     txs = get_transactions(ACCOUNT)
-    save_to_csv(txs)
+    save_to_csv(txs, ACCOUNT)
