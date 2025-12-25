@@ -12,5 +12,8 @@ pip install -r requirements.txt
 
 Запуск:
 ```bash
+# Обычный:
 python main.py
+# Чтобы ноутбук не засыпал:
+caffeinate -dims python main.py
 ```

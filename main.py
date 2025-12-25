@@ -11,25 +11,18 @@ load_dotenv()
 
 BASE_URL = "https://toncenter.com/api/v2"
 
-MAX_RETRIES = 50 # повтор в случае ошибки
-RETRY_DELAY = 2 # секунды
+MAX_RETRIES = 1000  # повтор в случае ошибки
+RETRY_DELAY = 2   # секунды
 
-# Fragment: "UQDm89iCT0ax77q5r8aEeTQoxV_tabRqFaSb5popvEnlMO6e"
-ACCOUNT = "0:e6f3d8824f46b1efbab9afc684793428c55fed69b46a15a49be69a29bc49e530" # TON address
+ACCOUNT = "0:e6f3d8824f46b1efbab9afc684793428c55fed69b46a15a49be69a29bc49e530"  # TON address
 LIMIT = 100  # максимум за запрос
-
-
-# декабрь 2025
-START_TS = int(datetime(2025, 12, 1, tzinfo=timezone.utc).timestamp())
-END_TS   = int(datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp())
-
-# ============================================
 
 API_KEY = os.getenv("TON_API_KEY")
 if not API_KEY:
     raise RuntimeError("TON_API_KEY not set in .env")
 
-def get_transactions(account):
+
+def get_transactions(account, start_ts, end_ts):
     all_txs = []
     lt = None
     hash_ = None
@@ -52,13 +45,15 @@ def get_transactions(account):
                 r = requests.get(f"{BASE_URL}/getTransactions", params=params, timeout=10)
                 r.raise_for_status()
                 data = r.json()["result"]
-                print(f"Fetched {len(data)} transactions")
-                break  # успех — выходим из retry-цикла
+                first_ts = data[0]["utime"]
+                first_date = datetime.fromtimestamp(first_ts, tz=timezone.utc)
+                print(f"Fetched {len(data)} transactions (date {first_date})")
+                break
 
             except requests.exceptions.RequestException as e:
                 print(f"Request failed (attempt {attempt}/{MAX_RETRIES}): {e}")
                 if attempt == MAX_RETRIES:
-                    raise  # дальше не можем продолжать
+                    raise
                 time.sleep(RETRY_DELAY)
 
         if not data:
@@ -67,10 +62,10 @@ def get_transactions(account):
         for tx in data:
             ts = tx["utime"]
 
-            if ts < START_TS:
-                return all_txs  # ушли глубже декабря
+            if ts < start_ts:
+                return all_txs  # ушли глубже
 
-            if START_TS <= ts < END_TS:
+            if start_ts <= ts < end_ts:
                 all_txs.append(tx)
 
         # pagination
@@ -80,13 +75,13 @@ def get_transactions(account):
     return all_txs
 
 
-def save_to_csv(transactions, account, filename="ton_transactions_dec_2025.csv"):
+def save_to_csv(transactions, account, filename):
     rows = []
 
     for tx in transactions:
         ts = datetime.fromtimestamp(tx["utime"], tz=timezone.utc)
 
-        # ---------- RECEIVED ----------
+        # RECEIVED
         in_msg = tx.get("in_msg")
         if in_msg and in_msg.get("destination") == account:
             value = int(in_msg.get("value", 0)) / 1e9
@@ -97,11 +92,10 @@ def save_to_csv(transactions, account, filename="ton_transactions_dec_2025.csv")
                 "Value (TON)": value
             })
 
-        # ---------- SENT ----------
+        # SENT
         for out_msg in tx.get("out_msgs", []):
             dest = out_msg.get("destination")
             value = int(out_msg.get("value", 0)) / 1e9
-
             if value > 0 and dest != account:
                 rows.append({
                     "Timestamp": ts,
@@ -115,6 +109,19 @@ def save_to_csv(transactions, account, filename="ton_transactions_dec_2025.csv")
     print(f"Saved {len(df)} rows to {filename}")
 
 
+def save_transactions(month, year):
+    start_ts = int(datetime(year, month, 1, tzinfo=timezone.utc).timestamp())
+    if month == 12:
+        end_ts = int(datetime(year + 1, 1, 1, tzinfo=timezone.utc).timestamp())
+    else:
+        end_ts = int(datetime(year, month + 1, 1, tzinfo=timezone.utc).timestamp())
+    filename = f"{month}_{year}.csv"
+    txs = get_transactions(ACCOUNT, start_ts, end_ts)
+    save_to_csv(txs, ACCOUNT, filename)
+
+
 if __name__ == "__main__":
-    txs = get_transactions(ACCOUNT)
-    save_to_csv(txs, ACCOUNT)
+    # save_transactions(12, 2025)
+    for month in range(12):
+        save_transactions(month + 1, 2025)
+
